@@ -6,6 +6,7 @@
         "description": "Spell check inside source code",
         "version": "0.1.1",
         "mod_version": "3",
+        "path": "spellcomments.lua"
     }
   ]
 }
