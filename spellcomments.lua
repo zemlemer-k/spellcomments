@@ -22,7 +22,7 @@ config.plugins.spellcomments = common.merge({
     enabled = false,
     underline_color = {255, 0, 0}
     --files = { "%.c$", "%.cpp$", "%.h$", "%.lua$" }
-}, config.plugins.spellcomments )
+}, config.plugins.spellcomments)
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Dictionary
@@ -102,7 +102,9 @@ end
 local ext_type = {
     regular = "regular",
     c_type = "c_type",
-    lua_type = "lua_type"
+    lua_type = "lua_type",
+    md_type = "md_type",
+    txt_type = "txt_type"
 }
 
 local SpellChecker =
@@ -115,13 +117,13 @@ function SpellChecker:reset()
     collectgarbage("step")
 end
 
-function SpellChecker:scan_multiline(doc, string_type)
+function SpellChecker:scan_multiline_code(doc, string_type)
 
     local start_sign, end_sign
     if     string_type == ext_type.regular  then start_sign =  "[\"']"
     elseif string_type == ext_type.c_type   then start_sign = "/%*"        end_sign = "%*/"
     elseif string_type == ext_type.lua_type then start_sign = "%[=*%["
-    else   core.warn("bad scan_multiline string type");   return false
+    else   core.warn("bad scan_multiline_code string type");   return false
     end
 
     local inside_line = false
@@ -134,8 +136,8 @@ function SpellChecker:scan_multiline(doc, string_type)
         pos = 1
         -- removing esc symbols and line feed
         if string_type == ext_type.regular then
-            line = line:gsub("\\[\"']", "")
-            line = line:gsub("\\%s*$", "")
+            line = line:ugsub("\\[\"']", "")
+            line = line:ugsub("\\%s*$", "")
         end
 
         while(pos < #line) do
@@ -167,7 +169,6 @@ function SpellChecker:scan_multiline(doc, string_type)
                 end
             else --inside comment in multiple comment string
                 start_pos = 1
-                --end_pos = line:find(multiline_comment_end, pos, true)
                 end_pos = line:ufind(end_sign, pos)
                 if end_pos then -- found end in mutilple comment string
                     pos = end_pos + #end_sign
@@ -184,11 +185,11 @@ function SpellChecker:scan_multiline(doc, string_type)
     return true
 end
 
-function SpellChecker:scan_singleline(doc, string_type)
+function SpellChecker:scan_singleline_code(doc, string_type)
     local start_sign
     if     string_type == ext_type.c_type   then start_sign = "//"
     elseif string_type == ext_type.lua_type then start_sign = "%-%-"
-    else   core.warn("bad scan_multiline string type");   return false
+    else   core.warn("bad scan_singleline_code string type");   return false
     end
 
     local start_pos, e
@@ -196,7 +197,7 @@ function SpellChecker:scan_singleline(doc, string_type)
         -- doc:set_selection(line_num, 1, line_num, 1)  -- moving to string
         local line  = doc.lines[line_num]
         start_pos, e = line:ufind(start_sign)
-        -- Skipping multile lua comments
+        -- Skipping multiline lua comments
         if nil ~= start_pos and string_type == ext_type.lua_type then
             local next_char = line.usub(e + 1, e + 1)
             if next_char == "[" then
@@ -206,6 +207,54 @@ function SpellChecker:scan_singleline(doc, string_type)
         if start_pos then
             local commentsubstring = line:usub(start_pos)
             self.verification_strings[{l = line_num, s = start_pos}] = commentsubstring
+        end
+    end
+    return true
+end
+
+
+function SpellChecker:scan_text(doc, string_type)
+
+    if string_type ~= ext_type.md_type and string_type ~= ext_type.txt_type then
+        core.error("bad call of scan_text") return false
+    end
+    local quote_md_sign = "^%s*>"
+    local code_md_block_sign = "^%s*```"
+    local inside_quote = false
+    local inside_block = false
+
+    for line_num = 1, #doc.lines do
+        local line  = doc.lines[line_num]
+        local substring
+        local start_pos = 1
+        if(string_type == ext_type.txt_type) then
+            self.verification_strings[{l = line_num, s = start_pos}] = line
+        else
+            if line:ufind(code_md_block_sign, start_pos) then
+                inside_block = not inside_block
+            end
+            if line:ufind(quote_md_sign, start_pos) then
+                inside_quote = true
+            else
+                inside_quote = false
+            end
+
+            if false == inside_quote and false == inside_block then
+                while start_pos < #line do
+                    local quote_pos = line:ufind("`", start_pos)
+                    if nil == quote_pos then
+                        self.verification_strings[{l = line_num, s = start_pos}] = line:usub(start_pos, #line)
+                        start_pos = #line + 1
+
+                    else
+                        substring = line:usub(start_pos, quote_pos)
+                        self.verification_strings[{l = line_num, s = start_pos}] = substring
+                        start_pos = line:ufind("`", quote_pos + 1)
+                        if nil == start_pos then break end
+                        start_pos = start_pos + 1
+                    end
+                end
+            end
         end
     end
     return true
@@ -235,24 +284,30 @@ local parent_draw = RootView.draw
 function RootView:draw()
     parent_draw(self)
 
+
     if false == config.plugins.spellcomments.enabled    then return end
     if not core.active_view:is(DocView)                 then return end
-    --if nil == core.active_view.doc.filename             then return end
+
+    SpellChecker:reset()
 
     local filename = core.active_view.doc.filename
     local doc = core.active_view.doc
     local ext = filename:umatch("^.+(%..+)$") or ""
     ext = ext:sub(2):ulower()
 
-    local file_type = nil
-    if ext == "lua"                             then file_type = ext_type.lua_type end
-    if ext == "c" or ext == "cpp" or ext == "h" then file_type = ext_type.c_type   end
-    if nil == file_type then return end
-
-    SpellChecker:reset()
-    assert(SpellChecker:scan_multiline(doc, file_type),  "scan_multiline error")
-    assert(SpellChecker:scan_multiline(doc, ext_type.regular),  "scan_multiline error")
-    assert(SpellChecker:scan_singleline(doc, file_type), "scan_singleline error")
+    if ext == "lua" then
+        assert(SpellChecker:scan_multiline_code(doc, ext_type.lua_type),  "scan multiline code error")
+        assert(SpellChecker:scan_singleline_code(doc, ext_type.lua_type), "scan singleline code error")
+        assert(SpellChecker:scan_multiline_code(doc, ext_type.regular),   "scan regular strings error")
+    elseif ext == "c" or ext == "cpp" or ext == "h" then
+        assert(SpellChecker:scan_multiline_code(doc, ext_type.c_type),   "scan_multiline_code error")
+        assert(SpellChecker:scan_singleline_code(doc, ext_type.c_type),  "scan singleline code error")
+        assert(SpellChecker:scan_multiline_code(doc, ext_type.regular),  "scan regular strings error")
+    elseif ext == "md" then
+        assert(SpellChecker:scan_text(doc, ext_type.md_type),            "scan markdown strings error")
+    elseif ext == "txt" then
+        assert(SpellChecker:scan_text(doc, ext_type.txt_type),           "scan text strings error")
+    end
 
     local docview = core.active_view
     local l_top, l_bot = docview:get_visible_line_range()
@@ -261,7 +316,7 @@ function RootView:draw()
     for pos, chk_string in pairs(SpellChecker.verification_strings) do
         local line_num = pos.l
         local start_shift = pos.s
-        if line_num >= l_top and line_num <= l_bot then  
+        if line_num >= l_top and line_num <= l_bot then
             for pos_shift, word in SpellChecker:spell_iter(chk_string) do
                 if false == SpellDict:check(word) then
                     local shift = start_shift + pos_shift
@@ -273,13 +328,12 @@ function RootView:draw()
             end -- words iterator
         end -- line in visible range
     end -- strings iterator
-    --config.plugins.spellcomments.enabled = false
 end
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Main plugin functions
 ------------------------------------------------------------------------------------------------------------------------------------------------------
-assert(SpellDict:load(), "Failed to load doctionaries")
+assert(SpellDict:load(), "Failed to load dictionaries")
 core.log("SpellChecker loaded")
 
 command.add("core.docview", {
