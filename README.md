@@ -24,6 +24,6 @@ Feel free to:
 
 ## TODO
 - [X] Add support for `.txt` and `.md` files.
-- [ ] Allow custom dictionary updates.
+- [X] Allow custom dictionary update.
 - [ ] Add spelling suggestions.
 - [ ] Support additional languages.

@@ -21,8 +21,37 @@ local keymap = require "core.keymap"
 config.plugins.spellcomments = common.merge({
     enabled = false,
     underline_color = {255, 0, 0}
-    --files = { "%.c$", "%.cpp$", "%.h$", "%.lua$" }
+    --files = { "%.c$", "%.cpp$", "%.h$", "%.lua$", "%.txt", "%.md" }
 }, config.plugins.spellcomments)
+
+
+local rclick_pos_x, rclick_pos_y = 0, 0
+
+------------------------------------------------------------------------------------------------------------------------------------------------------
+-- local functions
+------------------------------------------------------------------------------------------------------------------------------------------------------
+local function pick_word(from_submenu)
+    local line, pos = 0, 0
+    local word = nil
+    local doc = core.active_view.doc
+    local start_pos = 1
+
+    if false == from_submenu then
+        line, pos  = doc:get_selection()
+    else
+        line, pos = core.active_view:resolve_screen_position(rclick_pos_x, rclick_pos_y)
+    end
+
+    local searchline = doc.lines[line]
+
+    while start_pos < #searchline do
+        local s, e = searchline:ufind("[%a]+", start_pos)
+        if nil == s then return end
+        local word = searchline:usub(s, e)
+        if pos >= s and pos <= e + 1 then return word end
+        start_pos = e + 1
+    end
+end
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Dictionary
@@ -55,7 +84,7 @@ function SpellDict:load_dict(path)
     local content = file:read("*a")
     file:close()
     core.add_thread(function()
-        for word in content:gmatch("[%a%-]+") do  -- any char, any "-"
+        for word in content:gmatch("[%a]+") do  -- any char, any "-"
             if word ~= "" then
                 self.dictionary[word:ulower()] = true
                 self.word_count = self.word_count + 1
@@ -92,8 +121,33 @@ function SpellDict:load()
     return true
 end
 
+
 function SpellDict:check(word)
     return self.dictionary[word:ulower()] ~= nil
+end
+
+function SpellDict:add_word(from_submenu)
+   if false == config.plugins.spellcomments.enabled    then return end
+
+   local word = pick_word(from_submenu)
+   if nil == word then
+      core.warn("spellcomments: Unable to find word")
+   end
+   word = word:ulower()
+
+   if true == self:check(word) then
+      core.warn("spellcomments: word is already in dictionary")
+      return
+   end
+
+   self.dictionary_loaded = false
+   local user_dict = io.open(self.user_dictionary_file, 'a')
+   user_dict:write(word.."\n")
+   user_dict:close()
+   self:load()
+
+   core.log("User dictionary updated")
+
 end
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -280,13 +334,24 @@ end
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 -- Display
 ------------------------------------------------------------------------------------------------------------------------------------------------------
+-- Captue cursor position for menu
+local root_view_on_mouse_pressed = RootView.on_mouse_pressed
+function RootView:on_mouse_pressed(button, x, y, clicks)
+    local res = root_view_on_mouse_pressed(self, button, x, y, clicks)
+    if button == "right" then
+        rclick_pos_x, rclick_pos_y = x, y
+    end
+   return res
+end
+
+-- Main redraw function
 local parent_draw = RootView.draw
 function RootView:draw()
     parent_draw(self)
 
-
-    if false == config.plugins.spellcomments.enabled    then return end
     if not core.active_view:is(DocView)                 then return end
+    if false == config.plugins.spellcomments.enabled    then return end
+    if false == SpellChecker.dictionary_loaded          then return end
 
     SpellChecker:reset()
 
@@ -294,6 +359,7 @@ function RootView:draw()
     local doc = core.active_view.doc
     local ext = filename:umatch("^.+(%..+)$") or ""
     ext = ext:sub(2):ulower()
+
 
     if ext == "lua" then
         assert(SpellChecker:scan_multiline_code(doc, ext_type.lua_type),  "scan multiline code error")
@@ -331,29 +397,47 @@ function RootView:draw()
 end
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------
--- Main plugin functions
+-- Main plugin setup
 ------------------------------------------------------------------------------------------------------------------------------------------------------
-assert(SpellDict:load(), "Failed to load dictionaries")
-core.log("SpellChecker loaded")
-
 command.add("core.docview", {
     ["spellcomments:toggle"] = function()
         config.plugins.spellcomments.enabled = not config.plugins.spellcomments.enabled
-        core.log("--- spellcomments toggle: %s", config.plugins.spellcomments.enabled and "on" or "off")
+        core.log("spellcomments: %s", config.plugins.spellcomments.enabled and "on" or "off")
     end,
 
     ["spellcomments:enable"] = function()
         config.plugins.spellcomments.enabled = true
-        core.log("--- spellcomments enabled")
+        core.log("spellcomments on")
     end,
 
     ["spellcomments:disable"] = function()
         config.plugins.spellcomments.enabled = false
-        core.log("--- spellcomments disabled")
+        core.log("spellcomments off")
+    end,
+
+    ["spellcomments:add to dictionary"] = function()
+        SpellDict:add_word(false)
+        -- core.log("adding word to dictionary")
+    end,
+
+    ["spellcomments:add to dictionary from submenu"] = function()
+        SpellDict:add_word(true)
+        -- core.log("adding word to dictionary")
     end
+
+
+})
+
+local contextmenu = require "plugins.contextmenu"
+contextmenu:register("core.docview", {
+  contextmenu.DIVIDER,
+  { text = "Add To Dictionary", command = "spellcomments:add to dictionary from submenu" }
 })
 
 keymap.add {
     ["ctrl+shift+t"] = "spellcomments:toggle",
 }
+
+assert(SpellDict:load(), "Failed to load dictionaries")
+core.log("SpellChecker loaded")
 
